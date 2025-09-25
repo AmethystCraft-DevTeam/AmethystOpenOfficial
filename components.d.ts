@@ -9,5 +9,6 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     BlackHoleBackground: typeof import('./src/components/ui/bg-black-hole/BlackHoleBackground.vue')['default']
+    CardSpotlight: typeof import('./src/components/ui/card-spotlight/CardSpotlight.vue')['default']
   }
 }

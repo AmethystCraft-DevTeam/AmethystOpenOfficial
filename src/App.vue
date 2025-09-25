@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useColorMode } from '@vueuse/core'
 import BlackHoleBackground from '@/components/ui/bg-black-hole/BlackHoleBackground.vue'
+import { CardSpotlight } from '@/components/ui/card-spotlight'
 import docsConfig from '@/docs/config.json'
 
 interface DocNavItem {
@@ -13,8 +15,17 @@ interface DocsConfig {
   sidebar: DocNavItem[]
 }
 
+interface DocMeta {
+  slug: string
+  label: string
+}
+
 const config = docsConfig as DocsConfig
 const sidebarItems = config.sidebar ?? []
+
+const colorMode = useColorMode()
+const isDark = computed(() => colorMode.value === 'dark')
+const spotlightColor = computed(() => (isDark.value ? '#363636' : '#C9C9C9'))
 
 const docsModules = import.meta.glob('@/docs/**/*.md', {
   eager: true,
@@ -39,6 +50,30 @@ function registerNavItem(item: DocNavItem) {
 }
 sidebarItems.forEach(registerNavItem)
 
+const orderedDocs: string[] = []
+const visited = new Set<string>()
+
+function collectDocuments(items: DocNavItem[]) {
+  items.forEach((item) => {
+    if (item.document && docsContentMap[item.document] && !visited.has(item.document)) {
+      orderedDocs.push(item.document)
+      visited.add(item.document)
+    }
+    if (item.children) {
+      collectDocuments(item.children)
+    }
+  })
+}
+
+collectDocuments(sidebarItems)
+
+Object.keys(docsContentMap).forEach((slug) => {
+  if (!visited.has(slug)) {
+    orderedDocs.push(slug)
+    visited.add(slug)
+  }
+})
+
 function findFirstDocument(items: DocNavItem[]): string | null {
   for (const item of items) {
     if (item.document && docsContentMap[item.document]) {
@@ -55,6 +90,12 @@ function findFirstDocument(items: DocNavItem[]): string | null {
 const defaultDoc = findFirstDocument(sidebarItems) ?? Object.keys(docsContentMap)[0] ?? ''
 const activeSlug = ref<string>(defaultDoc)
 
+function scrollToDocsSection(behavior: ScrollBehavior = 'smooth') {
+  nextTick(() => {
+    document.getElementById('docs-section')?.scrollIntoView({ behavior, block: 'start' })
+  })
+}
+
 function parseHash(): string | null {
   const hash = decodeURIComponent(window.location.hash)
   if (hash.startsWith('#docs/')) {
@@ -70,10 +111,10 @@ let suppressHashEvent = false
 
 function setActiveDoc(slug: string) {
   if (!docsContentMap[slug]) return
-  activeSlug.value = slug
-  nextTick(() => {
-    document.getElementById('docs-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  })
+  if (activeSlug.value !== slug) {
+    activeSlug.value = slug
+  }
+  scrollToDocsSection()
 }
 
 function handleHashChange() {
@@ -83,16 +124,16 @@ function handleHashChange() {
   }
   const slug = parseHash()
   if (slug) {
-    activeSlug.value = slug
+    setActiveDoc(slug)
   } else if (defaultDoc) {
-    activeSlug.value = defaultDoc
+    setActiveDoc(defaultDoc)
   }
 }
 
 onMounted(() => {
   const slug = parseHash()
   if (slug) {
-    activeSlug.value = slug
+    setActiveDoc(slug)
   }
   window.addEventListener('hashchange', handleHashChange)
 })
@@ -222,6 +263,38 @@ function renderMarkdown(src: string) {
 const renderedHtml = computed(() => renderMarkdown(activeMarkdown.value))
 
 const docsAvailable = computed(() => Object.keys(docsContentMap).length > 0)
+
+function getDocMeta(slug: string): DocMeta {
+  return {
+    slug,
+    label: docMetaMap.get(slug)?.label ?? slug,
+  }
+}
+
+const activeIndex = computed(() => orderedDocs.indexOf(activeSlug.value))
+
+const prevDoc = computed<DocMeta | null>(() => {
+  const idx = activeIndex.value
+  if (idx > 0) {
+    const slug = orderedDocs[idx - 1]
+    return slug ? getDocMeta(slug) : null
+  }
+  return null
+})
+
+const nextDoc = computed<DocMeta | null>(() => {
+  const idx = activeIndex.value
+  if (idx !== -1 && idx < orderedDocs.length - 1) {
+    const slug = orderedDocs[idx + 1]
+    return slug ? getDocMeta(slug) : null
+  }
+  return null
+})
+
+function goToDoc(slug?: string) {
+  if (!slug) return
+  setActiveDoc(slug)
+}
 </script>
 
 <template>
@@ -284,7 +357,62 @@ const docsAvailable = computed(() => Object.keys(docsContentMap).length > 0)
               <p class="text-xs uppercase tracking-[0.4em] text-white/50">#docs/{{ activeSlug }}</p>
               <h2 class="text-2xl font-semibold text-white md:text-3xl">{{ activeTitle }}</h2>
             </header>
-            <div v-if="docsAvailable" class="docs-content mt-8" v-html="renderedHtml"></div>
+            <template v-if="docsAvailable">
+              <div class="docs-content mt-8" v-html="renderedHtml"></div>
+              <div class="mt-12 grid gap-4 md:grid-cols-2">
+                <template v-if="prevDoc">
+                  <a
+                    class="group block"
+                    :href="`#docs/${prevDoc?.slug}`"
+                    @click.prevent="goToDoc(prevDoc?.slug)"
+                  >
+                    <CardSpotlight
+                      class="cursor-pointer items-start justify-center gap-3 rounded-3xl border border-white/10 bg-white/5 px-6 py-8 shadow-lg shadow-purple-500/20 transition duration-300 hover:-translate-y-1 hover:border-white/30 hover:shadow-purple-500/40"
+                      slot-class="flex h-full w-full flex-col gap-2 text-left"
+                      :gradient-color="spotlightColor"
+                    >
+                      <span class="text-xs uppercase tracking-[0.3em] text-white/50">上一篇</span>
+                      <span class="text-lg font-semibold text-white">{{ prevDoc?.label }}</span>
+                    </CardSpotlight>
+                  </a>
+                </template>
+                <CardSpotlight
+                  v-else
+                  class="pointer-events-none items-start justify-center gap-3 rounded-3xl border border-white/5 bg-white/10 px-6 py-8 opacity-40"
+                  slot-class="flex h-full w-full flex-col gap-2 text-left"
+                  :gradient-color="spotlightColor"
+                >
+                  <span class="text-xs uppercase tracking-[0.3em] text-white/40">上一篇</span>
+                  <span class="text-lg font-semibold text-white/40">没有更多内容</span>
+                </CardSpotlight>
+
+                <template v-if="nextDoc">
+                  <a
+                    class="group block"
+                    :href="`#docs/${nextDoc?.slug}`"
+                    @click.prevent="goToDoc(nextDoc?.slug)"
+                  >
+                    <CardSpotlight
+                      class="cursor-pointer items-start justify-center gap-3 rounded-3xl border border-white/10 bg-white/5 px-6 py-8 shadow-lg shadow-purple-500/20 transition duration-300 hover:-translate-y-1 hover:border-white/30 hover:shadow-purple-500/40"
+                      slot-class="flex h-full w-full flex-col gap-2 text-left"
+                      :gradient-color="spotlightColor"
+                    >
+                      <span class="text-xs uppercase tracking-[0.3em] text-white/50">下一篇</span>
+                      <span class="text-lg font-semibold text-white">{{ nextDoc?.label }}</span>
+                    </CardSpotlight>
+                  </a>
+                </template>
+                <CardSpotlight
+                  v-else
+                  class="pointer-events-none items-start justify-center gap-3 rounded-3xl border border-white/5 bg-white/10 px-6 py-8 opacity-40"
+                  slot-class="flex h-full w-full flex-col gap-2 text-left"
+                  :gradient-color="spotlightColor"
+                >
+                  <span class="text-xs uppercase tracking-[0.3em] text-white/40">下一篇</span>
+                  <span class="text-lg font-semibold text-white/40">没有更多内容</span>
+                </CardSpotlight>
+              </div>
+            </template>
             <div v-else class="mt-8 text-sm text-white/60">
               暂无可用文档，请在 <code class="rounded bg-white/10 px-1">docs/</code> 目录中添加 Markdown 文件。
             </div>
