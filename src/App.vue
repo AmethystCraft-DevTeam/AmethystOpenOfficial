@@ -1,0 +1,365 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import BlackHoleBackground from '@/components/ui/bg-black-hole/BlackHoleBackground.vue'
+import docsConfig from '@/docs/config.json'
+
+interface DocNavItem {
+  label: string
+  document?: string
+  children?: DocNavItem[]
+}
+
+interface DocsConfig {
+  sidebar: DocNavItem[]
+}
+
+const config = docsConfig as DocsConfig
+const sidebarItems = config.sidebar ?? []
+
+const docsModules = import.meta.glob('@/docs/**/*.md', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+})
+
+const docsContentMap: Record<string, string> = {}
+Object.entries(docsModules).forEach(([path, content]) => {
+  const slug = path.split('/').pop()?.replace(/\.md$/, '')
+  if (slug) {
+    docsContentMap[slug] = content as string
+  }
+})
+
+const docMetaMap = new Map<string, DocNavItem>()
+function registerNavItem(item: DocNavItem) {
+  if (item.document) {
+    docMetaMap.set(item.document, item)
+  }
+  item.children?.forEach(registerNavItem)
+}
+sidebarItems.forEach(registerNavItem)
+
+function findFirstDocument(items: DocNavItem[]): string | null {
+  for (const item of items) {
+    if (item.document && docsContentMap[item.document]) {
+      return item.document
+    }
+    if (item.children) {
+      const child = findFirstDocument(item.children)
+      if (child) return child
+    }
+  }
+  return null
+}
+
+const defaultDoc = findFirstDocument(sidebarItems) ?? Object.keys(docsContentMap)[0] ?? ''
+const activeSlug = ref<string>(defaultDoc)
+
+function parseHash(): string | null {
+  const hash = decodeURIComponent(window.location.hash)
+  if (hash.startsWith('#docs/')) {
+    const slug = hash.replace('#docs/', '').trim()
+    if (slug && docsContentMap[slug]) {
+      return slug
+    }
+  }
+  return null
+}
+
+let suppressHashEvent = false
+
+function setActiveDoc(slug: string) {
+  if (!docsContentMap[slug]) return
+  activeSlug.value = slug
+  nextTick(() => {
+    document.getElementById('docs-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
+function handleHashChange() {
+  if (suppressHashEvent) {
+    suppressHashEvent = false
+    return
+  }
+  const slug = parseHash()
+  if (slug) {
+    activeSlug.value = slug
+  } else if (defaultDoc) {
+    activeSlug.value = defaultDoc
+  }
+}
+
+onMounted(() => {
+  const slug = parseHash()
+  if (slug) {
+    activeSlug.value = slug
+  }
+  window.addEventListener('hashchange', handleHashChange)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', handleHashChange)
+})
+
+watch(activeSlug, (slug) => {
+  if (!slug) return
+  const target = `#docs/${slug}`
+  if (window.location.hash !== target) {
+    suppressHashEvent = true
+    window.location.hash = target
+  }
+})
+
+const activeTitle = computed(() => {
+  if (!activeSlug.value) return '文档'
+  return docMetaMap.get(activeSlug.value)?.label ?? activeSlug.value
+})
+
+const activeMarkdown = computed(() => {
+  if (!activeSlug.value) return ''
+  return docsContentMap[activeSlug.value] ?? ''
+})
+
+function escapeHtml(str: string) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function renderMarkdown(src: string) {
+  if (!src) return '<p>暂无内容。</p>'
+  const lines = src.split(/\r?\n/)
+  let html = ''
+  let inList = false
+  let inCode = false
+  let codeLang = ''
+  let codeBuffer: string[] = []
+
+  const closeList = () => {
+    if (inList) {
+      html += '</ul>'
+      inList = false
+    }
+  }
+
+  const closeCode = () => {
+    if (inCode) {
+      const code = escapeHtml(codeBuffer.join('\n'))
+      const langAttr = codeLang ? ` data-lang="${codeLang}"` : ''
+      html += `<pre class="code-block"><code${langAttr}>${code}</code></pre>`
+      inCode = false
+      codeBuffer = []
+      codeLang = ''
+    }
+  }
+
+  lines.forEach((rawLine) => {
+    const line = rawLine
+    if (line.startsWith('```')) {
+      if (!inCode) {
+        closeList()
+        inCode = true
+        codeLang = line.slice(3).trim()
+        codeBuffer = []
+      } else {
+        closeCode()
+      }
+      return
+    }
+
+    if (inCode) {
+      codeBuffer.push(line)
+      return
+    }
+
+    const trimmed = line.trim()
+    if (!trimmed) {
+      closeList()
+      html += ''
+      return
+    }
+
+    const headingMatch = /^#{1,6}\s+/.exec(trimmed)
+    if (headingMatch) {
+      closeList()
+      const level = headingMatch[0].trim().length
+      const text = escapeHtml(trimmed.slice(level + 1))
+      html += `<h${level}>${text}</h${level}>`
+      return
+    }
+
+    if (trimmed.startsWith('- ')) {
+      if (!inList) {
+        closeList()
+        html += '<ul>'
+        inList = true
+      }
+      const text = escapeHtml(trimmed.slice(2))
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      html += `<li>${text}</li>`
+      return
+    }
+
+    closeList()
+    const paragraph = escapeHtml(trimmed)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    html += `<p>${paragraph}</p>`
+  })
+
+  closeList()
+  closeCode()
+
+  return html || '<p>暂无内容。</p>'
+}
+
+const renderedHtml = computed(() => renderMarkdown(activeMarkdown.value))
+
+const docsAvailable = computed(() => Object.keys(docsContentMap).length > 0)
+</script>
+
+<template>
+  <div class="dark min-h-dvh w-full bg-[#050416] text-white">
+    <section class="relative h-dvh overflow-hidden">
+      <BlackHoleBackground class="h-dvh w-full" stroke-color="#64748b" />
+      <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <h1
+          class="-translate-y-12 text-4xl font-semibold tracking-[0.2em] text-white/90 drop-shadow-2xl md:-translate-y-16 md:text-6xl"
+        >
+          AmethystOpen
+        </h1>
+      </div>
+    </section>
+
+    <section id="docs-section" class="relative z-10 border-t border-white/10 bg-[#050416] px-6 py-16 md:py-24">
+      <div class="mx-auto flex w-full max-w-6xl flex-col gap-12 md:flex-row">
+        <aside class="md:w-72">
+          <div class="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+            <h2 class="text-sm font-semibold uppercase tracking-[0.3em] text-white/60">Docs</h2>
+            <nav class="mt-6 space-y-6 text-sm">
+              <template v-for="section in sidebarItems" :key="section.label">
+                <div class="space-y-2">
+                  <button
+                    v-if="section.document && docsContentMap[section.document]"
+                    type="button"
+                    class="w-full rounded-2xl border border-transparent px-3 py-2 text-left font-medium text-white/80 transition hover:border-white/20 hover:bg-white/10"
+                    :class="{ 'border-white/40 bg-white/10 text-white': section.document === activeSlug }"
+                    @click="setActiveDoc(section.document)"
+                  >
+                    {{ section.label }}
+                  </button>
+                  <p v-else class="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">
+                    {{ section.label }}
+                  </p>
+                  <ul v-if="section.children" class="space-y-1 pl-2">
+                    <li v-for="child in section.children" :key="child.label">
+                      <button
+                        v-if="child.document && docsContentMap[child.document]"
+                        type="button"
+                        class="w-full rounded-xl px-3 py-2 text-left text-white/60 transition hover:bg-white/10 hover:text-white"
+                        :class="{ 'bg-white/10 text-white': child.document === activeSlug }"
+                        @click="setActiveDoc(child.document)"
+                      >
+                        {{ child.label }}
+                      </button>
+                      <span v-else class="block rounded-xl px-3 py-2 text-left text-white/40">
+                        {{ child.label }}
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+              </template>
+            </nav>
+          </div>
+        </aside>
+        <div class="flex-1">
+          <div class="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-xl shadow-purple-500/10 backdrop-blur">
+            <header class="flex flex-col gap-2 border-b border-white/10 pb-6">
+              <p class="text-xs uppercase tracking-[0.4em] text-white/50">#docs/{{ activeSlug }}</p>
+              <h2 class="text-2xl font-semibold text-white md:text-3xl">{{ activeTitle }}</h2>
+            </header>
+            <div v-if="docsAvailable" class="docs-content mt-8" v-html="renderedHtml"></div>
+            <div v-else class="mt-8 text-sm text-white/60">
+              暂无可用文档，请在 <code class="rounded bg-white/10 px-1">docs/</code> 目录中添加 Markdown 文件。
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+:deep(.docs-content) {
+  display: grid;
+  gap: 1.5rem;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+:deep(.docs-content h1) {
+  margin-top: 2.5rem;
+  font-size: 1.875rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+:deep(.docs-content h2) {
+  margin-top: 2.25rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+:deep(.docs-content h3) {
+  margin-top: 2rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+:deep(.docs-content p) {
+  color: rgba(226, 232, 240, 0.92);
+}
+
+:deep(.docs-content ul) {
+  margin: 0.5rem 0 0;
+  padding-left: 1.5rem;
+  display: grid;
+  gap: 0.5rem;
+  list-style: disc;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+:deep(.docs-content li) {
+  line-height: 1.7;
+}
+
+:deep(.docs-content code) {
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.5rem;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.75rem;
+  color: rgb(167, 243, 208);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:deep(.docs-content .code-block) {
+  overflow-x: auto;
+  padding: 1rem;
+  border-radius: 1rem;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.8rem;
+  color: rgb(195, 255, 234);
+  background: rgba(15, 23, 42, 0.78);
+}
+</style>

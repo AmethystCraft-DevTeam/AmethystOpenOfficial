@@ -1,0 +1,21 @@
+{
+  "sidebar": [
+    {
+      "label": "概览",
+      "document": "introduction"
+    },
+    {
+      "label": "指南",
+      "children": [
+        {
+          "label": "项目结构",
+          "document": "structure"
+        },
+        {
+          "label": "快速上手",
+          "document": "quick-start"
+        }
+      ]
+    }
+  ]
+}
