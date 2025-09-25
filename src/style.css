@@ -140,3 +140,11 @@ html.dark {
 html.light {
   color-scheme: light;
 }
+
+body.smooth-cursor-hidden {
+  cursor: none !important;
+}
+
+body.smooth-cursor-hidden * {
+  cursor: none !important;
+}

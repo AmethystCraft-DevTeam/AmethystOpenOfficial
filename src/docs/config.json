@@ -5,15 +5,11 @@
       "document": "introduction"
     },
     {
-      "label": "指南",
+      "label": "API 文档",
       "children": [
         {
-          "label": "项目结构",
-          "document": "structure"
-        },
-        {
-          "label": "快速上手",
-          "document": "quick-start"
+          "label": "网易云音乐接口",
+          "document": "api-neteasemusic"
         }
       ]
     }

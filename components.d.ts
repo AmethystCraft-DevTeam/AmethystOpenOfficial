@@ -10,5 +10,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     BlackHoleBackground: typeof import('./src/components/ui/bg-black-hole/BlackHoleBackground.vue')['default']
     CardSpotlight: typeof import('./src/components/ui/card-spotlight/CardSpotlight.vue')['default']
+    DefaultCursor: typeof import('./src/components/ui/smooth-cursor/DefaultCursor.vue')['default']
+    SmoothCursor: typeof import('./src/components/ui/smooth-cursor/SmoothCursor.vue')['default']
   }
 }

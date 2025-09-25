@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useColorMode } from '@vueuse/core'
 import BlackHoleBackground from '@/components/ui/bg-black-hole/BlackHoleBackground.vue'
 import { CardSpotlight } from '@/components/ui/card-spotlight'
+import { SmoothCursor } from '@/components/ui/smooth-cursor'
 import docsConfig from '@/docs/config.json'
 
 interface DocNavItem {
@@ -178,6 +179,7 @@ function renderMarkdown(src: string) {
   let inCode = false
   let codeLang = ''
   let codeBuffer: string[] = []
+  let tableBuffer: string[] = []
 
   const closeList = () => {
     if (inList) {
@@ -197,11 +199,55 @@ function renderMarkdown(src: string) {
     }
   }
 
+  const isTableLine = (line: string) => {
+    const trimmed = line.trim()
+    return trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.includes('|')
+  }
+
+  const flushTable = () => {
+    if (!tableBuffer.length) return
+    const rows = tableBuffer
+      .map((row) =>
+        row
+          .trim()
+          .slice(1, -1)
+          .split('|')
+          .map((cell) => escapeHtml(cell.trim())),
+      )
+      .filter((cells) => cells.length)
+
+    if (rows.length) {
+      const header = rows[0] ?? []
+      if (!header.length) {
+        tableBuffer = []
+        return
+      }
+
+      const alignmentRow = rows[1]
+      const hasAlignment = alignmentRow?.every((cell) => /^\s*:?-{3,}:?\s*$/.test(cell)) ?? false
+      const bodyRows = rows.slice(hasAlignment ? 2 : 1)
+
+      html += '<table class="docs-table">'
+      html += '<thead><tr>' + header.map((cell) => `<th>${cell}</th>`).join('') + '</tr></thead>'
+      if (bodyRows.length) {
+        html += '<tbody>'
+        bodyRows.forEach((cells) => {
+          html += '<tr>' + cells.map((cell) => `<td>${cell}</td>`).join('') + '</tr>'
+        })
+        html += '</tbody>'
+      }
+      html += '</table>'
+    }
+
+    tableBuffer = []
+  }
+
   lines.forEach((rawLine) => {
     const line = rawLine
     if (line.startsWith('```')) {
       if (!inCode) {
         closeList()
+        flushTable()
         inCode = true
         codeLang = line.slice(3).trim()
         codeBuffer = []
@@ -219,13 +265,14 @@ function renderMarkdown(src: string) {
     const trimmed = line.trim()
     if (!trimmed) {
       closeList()
-      html += ''
+      flushTable()
       return
     }
 
     const headingMatch = /^#{1,6}\s+/.exec(trimmed)
     if (headingMatch) {
       closeList()
+      flushTable()
       const level = headingMatch[0].trim().length
       const text = escapeHtml(trimmed.slice(level + 1))
       html += `<h${level}>${text}</h${level}>`
@@ -235,6 +282,7 @@ function renderMarkdown(src: string) {
     if (trimmed.startsWith('- ')) {
       if (!inList) {
         closeList()
+        flushTable()
         html += '<ul>'
         inList = true
       }
@@ -246,6 +294,14 @@ function renderMarkdown(src: string) {
       return
     }
 
+    if (isTableLine(line)) {
+      closeList()
+      tableBuffer.push(line)
+      return
+    }
+
+    flushTable()
+
     closeList()
     const paragraph = escapeHtml(trimmed)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -256,6 +312,7 @@ function renderMarkdown(src: string) {
 
   closeList()
   closeCode()
+  flushTable()
 
   return html || '<p>暂无内容。</p>'
 }
@@ -420,6 +477,7 @@ function goToDoc(slug?: string) {
         </div>
       </div>
     </section>
+    <SmoothCursor />
   </div>
 </template>
 
@@ -489,5 +547,32 @@ function goToDoc(slug?: string) {
   font-size: 0.8rem;
   color: rgb(195, 255, 234);
   background: rgba(15, 23, 42, 0.78);
+}
+
+:deep(.docs-table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  overflow: hidden;
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.6);
+  box-shadow: 0 10px 40px rgba(45, 30, 90, 0.25);
+}
+
+:deep(.docs-table th),
+:deep(.docs-table td) {
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  text-align: left;
+  font-size: 0.875rem;
+  color: rgba(226, 232, 240, 0.95);
+}
+
+:deep(.docs-table th) {
+  background: rgba(94, 234, 212, 0.08);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(226, 232, 240, 0.9);
 }
 </style>
